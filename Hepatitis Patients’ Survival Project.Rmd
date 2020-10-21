@@ -1,0 +1,367 @@
+---
+title: "BIS 625 Project"
+author: "Yiziying Chen"
+date: "5/3/2019"
+output:
+  word_document: default
+  html_document: default
+---
+
+```{r}
+data = read.table("hepatitis.data", sep = ",")[,-20]
+colnames(data) = c("class", "age", "sex", "steroid", "antiviral", "fatigue", "malaise", "anorexia","liver_big", "liver_firm", "spleen_palpable", "spiders", "ascites", "varices", "bilirubin", "alk_phosphate", "sgot", "albumin", "protime")
+for (i in 1:length(colnames(data))){
+  levels(data[,i])[levels(data[,i]) == "?"] <-NA
+}
+
+
+data$bilirubin <- as.numeric(as.character(data$bilirubin))
+data$protime <- as.numeric(as.character(data$protime))
+data$alk_phosphate <- as.numeric(as.character(data$alk_phosphate))
+data$sgot <- as.numeric(as.character(data$sgot))
+data$albumin <- as.numeric(as.character(data$albumin))
+data$age <- as.numeric(as.character(data$age))
+data$sex <- as.factor(data$sex)
+data$class <- as.factor(data$class)
+data$antiviral <- as.factor(data$antiviral)
+
+pairs(data[, c("class", "age", "sgot","albumin", "alk_phosphate", "protime", "bilirubin", "varices")])
+```
+
+##contigency table for OR, RR test for association
+```{r}
+##create contigency tables
+cat.attributes = c("sex", "steroid", "antiviral", "fatigue", "malaise", "anorexia","liver_big", "liver_firm", "spleen_palpable", "spiders", "ascites", "varices")
+
+t = list()
+table = list()
+for(i in 1:length(cat.attributes)){
+  t[[i]] = data[complete.cases(data[ , c("class", cat.attributes[i])]),]
+  table[[i]] = table(t[[i]][,cat.attributes[i]], t[[i]]$class)
+  colnames(table[[i]]) = c("Death", "Live")
+}
+#label table row&col names
+rownames(table[[1]]) = c("M", "F")
+for(i in 2:length(cat.attributes)){
+ rownames(table[[i]]) = c(paste(cat.attributes[i], "Yes"), "No")
+}
+```
+
+##Risk difference, Relative Risk and Odds ratio 
+###Chi-square test and Exact test for independence
+```{r}
+library('epiR')
+#test for independence
+OR = list()
+result = list()
+IR.CI = list()
+OR.CI = list()
+indep.test = list()
+fisher = list()
+for (i in 1:12){
+      result[[i]] = epi.2by2(table[[i]], method = "cohort.count", conf.level = 0.95)
+  if (all(as.vector(table[[i]]) > 5)) {
+      indep.test[[i]] = data.frame(test.stat = result[[i]]$massoc$chisq.strata$test.statistic, p.value = result[[i]]$massoc$chisq.strata$p.value, attri = cat.attributes[i])
+  }
+  else{
+    fisher[[i]] =fisher.test(table[[i]], alternative = 'two.sided')
+    indep.test[[i]] = data.frame(est = fisher[[i]]$estimate, ci.lwr = fisher[[i]]$conf.int[1],ci.upr = fisher[[i]]$conf.int[2], p.value = fisher[[i]]$p.value, attri = cat.attributes[i])
+    }
+  OR[[i]] = result[[i]]$tab
+  IR.CI[[i]] = result[[i]]$massoc$RR.strata.wald
+  OR.CI[[i]] = data.frame(result[[i]]$massoc$OR.strata.wald, attri = cat.attributes[i])
+}
+
+#find insignificant independence
+library(pipeR)
+library(rlist)
+indep.test %>>%
+  list.filter(p.value > 0.1) %>>%
+  list.mapv(attri)
+```
+
+##hypothesis testing--prop test
+```{r}
+prop.test(sum(as.numeric(data$class)-1), length(data$class), p = 0.5, alternative = "two.sided", conf.level = 0.95)
+```
+
+
+#3-way table; Breslow-Day test the homogeneous associations; mantelhaen test
+```{r}
+options(scipen = 999)
+library(DescTools)
+sig.attri = c("fatigue", "malaise",  "spleen_palpable", "spiders", "ascites", "varices")
+comb = combn(sig.attri,2)
+
+t2 = list();table2 = list();dp = list();df = list();ftable = list();mantel = list()
+mantel.test = list();bd = list();bd.test = list()
+for(i in 1:ncol(comb)){
+  t2[[i]] = data[complete.cases(data[ , c("class", comb[1,i], comb[2,i])]),]
+  table2[[i]] = table(t2[[i]]$class,t2[[i]][,comb[1,i]], t2[[i]][,comb[2,i]])
+  #colnames(table2[[i]]) = c("Death", "Live")
+  dp[[i]] = as.vector(table2[[i]])
+  df[[i]] <- array(dp[[i]], dim = c(2,2,2))
+  dimnames(df[[i]]) <- list(Class = c("DIE", "ALIVE"), attri1 = c("YES", "NO"), attri2 = c("YES", "NO"))
+  ftable[[i]] = ftable(df[[i]], row.vars = c("attri1", "attri2"), col.vars = "Class")
+  mantel[[i]] = mantelhaen.test(df[[i]], correct = F)
+  mantel.test[[i]] = c(mantel[[i]]$statistic, p.value = mantel[[i]]$p.value, conf.int.lwr = mantel[[i]]$conf.int[1], conf.int.upr = mantel[[i]]$conf.int[2], est = mantel[[i]]$estimate, attri1 = comb[1,i], attri2 = comb[2,i])
+  bd[[i]] = BreslowDayTest(x = table2[[i]], OR = 1)
+  bd.test[[i]] = c(test.stat = bd[[i]]$statistic, p.value = bd[[i]]$p.value, attri1 = comb[1,i], attri2= comb[2,i])
+}
+
+#check same homogenuous OR among stratum
+bd.test%>>%
+  list.filter(p.value > 0.1) %>>%
+  list.mapv(c(attri1, attri2)) %>>% matrix(ncol = 2, byrow = T)
+
+
+#check all OR = 1 among statum
+mantel.test %>>%
+  list.filter(p.value > 0.1 & !is.na(p.value)) %>>%
+  list.mapv(c(attri1, attri2)) %>>% matrix(ncol = 2, byrow = T)
+```
+
+#residual analysis
+```{r}
+library(vcd)
+death.margin = list(); odds = list(); chi = list();row.resid = list(); pearson.resid = list(); std.resid = list(); resid.result = list()
+
+for(i in 1:12){
+# odds ratio of margin table and chisquare test
+odds[[i]] = exp(oddsratio(table[[i]])$coefficients)
+chi[[i]] = chisq.test(table[[i]])
+#row resid
+row.resid[[i]] = chi[[i]]$observed - chi[[i]]$expected
+#pearson resid
+pearson.resid[[i]] = chi[[i]]$residuals
+#standardized resid
+std.resid[[i]] = chi[[i]]$stdres
+##colnames(std.resid[[i]]) = c(paste(comb[1,i], "Yes"), paste(comb[1,i], "No"))
+##rownames(std.resid[[i]]) = c("Death_Yes", "Death_No")
+}
+
+std.resid
+```
+
+
+##logistic regression--model selection
+```{r warning=F}
+library(dplyr)
+library(MASS)
+t.complete = data[complete.cases(data),]
+
+num.complete = data[complete.cases(data$bilirubin, data$alk_phosphate, data$sgot, data$albumin, data$protime),]
+
+cor(num.complete[,c("bilirubin", "alk_phosphate", "sgot", "albumin", "protime")])
+
+shapiro.test(as.numeric(t.complete$class))
+#logit link logistic regression
+fit = glm(class ~ age + steroid + fatigue + malaise + spleen_palpable + spiders + ascites+ varices + bilirubin + alk_phosphate + sgot + albumin + protime,family = binomial(link = logit), data = t.complete)
+summary(fit)
+stepAIC(fit, direction = "both")
+
+                #fit.new = glm(class ~ steroid + spiders+varices + sgot + albumin,family = binomial(link = logit), data = t.complete)
+fit.new = glm(class ~ steroid + ascites + varices + sgot + protime,family = binomial(link = logit), data = t.complete)
+summary(fit.new)
+anova(fit.new, fit, test = "LRT")
+
+                #fit.exp <- glm(formula = class ~ steroid + spiders + varices * albumin + sgot, family = binomial(link = logit), data = t.complete)
+
+##check multicollinearity:
+pairs(t.complete[,c("class","steroid" ,"ascites","varices" , "sgot", "protime")])
+
+#add interaction term
+fit.exp <- glm(formula = class ~ steroid + ascites + varices + sgot * protime, family = binomial(link = logit), data = t.complete)
+summary(fit.exp)
+anova(fit.new, fit.exp, test = "LRT")
+
+
+#probit link logistic regression
+probit.fit = glm(class ~ age + steroid + fatigue + malaise + spleen_palpable + spiders + ascites+ varices + bilirubin + alk_phosphate + sgot + albumin + protime, family = binomial(link = probit), data = t.complete)
+summary(probit.fit)
+stepAIC(probit.fit)
+
+probit.new = glm(formula = class ~ age + steroid + ascites + varices + alk_phosphate + sgot + protime, family = binomial(link = probit), data = t.complete)
+summary(probit.new)
+anova(probit.new, probit.fit, test = "LRT")
+#p(Y = death|X )= pnorm(predict(probit.fit))
+#p(Y = live|X) = 1-p(Y = death|X)
+#OR = p(Y=death|X) / (1-p(Y = death|X))
+##check multicollinearity:
+pairs(t.complete[,c("age" ,"steroid" , "ascites" , "varices" , "alk_phosphate" , "sgot" , "protime")])
+
+```
+
+##predictive power
+```{r}
+# ROC
+library(pROC)
+par(mfrow = c(1,2))
+rocplot.fit.new <- roc(class ~ fitted(fit.new), data = t.complete)
+plot.roc(rocplot.fit.new, legacy.axes = T, main = "Predictive Power ROC Curve (logit link)")
+txt.fit.new <- paste("AUC = ", round(auc(rocplot.fit.new),4))
+text(0.5, 0.5, txt.fit.new)
+#auc(rocplot)
+probit.rocplot.new <- roc(class ~ fitted(probit.new), data = t.complete)
+plot.roc(probit.rocplot.new, legacy.axes = T, main = "Predictive Power ROC Curve (probit link)")
+probit.txt.new <- paste("AUC = ", round(auc(probit.rocplot.new),4))
+text(0.5, 0.5, probit.txt.new)
+```
+
+##model checking
+```{r}
+##residual
+fit.new$df.residual
+##deviance
+fit.new$deviance
+##goodness of fit
+#p-value for deviance goodness-of-fit test
+1-pchisq(fit.new$deviance, fit.new$df.residual)
+qchisq(fit.new$deviance, fit.new$df.residual)
+## [1] 0.6360822
+logit.resids <- cbind(rstandard(fit.new,type="pearson"), residuals(fit.new,type="pearson"), residuals(fit.new,type="deviance"), rstandard(fit.new,type="deviance"))
+resids <- as.data.frame(logit.resids)
+colnames(resids) = c("std. pearson", "Pearson", "Deviance",  "std. deviance")
+
+par(mfrow = c(2,3))
+plot(fit.new$residuals, pch = 16, main = "Fitted Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(resids$`std. pearson` , pch = 16, main = "Standardized Pearson Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(resids$Pearson, pch = 16, main = "Pearson Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(resids$Deviance, pch = 16, main = "Deviance")
+abline(h = 0, lty = 2, col = "blue")
+plot(resids$`std. deviance`, pch = 16, main = "Standardized Deviance")
+abline(h = 0, lty = 2, col = "blue")
+
+#remove outlier and refit model--greater predictive power
+##logit model
+which.max(abs(fit.new$residuals))
+
+t.new = t.complete[-72,]
+
+fit1 = glm(class ~ steroid + ascites + varices + sgot + protime,family = binomial(link = logit), data = t.new)
+rocplot.fit.new1 <- roc(class ~ fitted(fit1), data = t.new)
+plot.roc(rocplot.fit.new1, legacy.axes = T, main = "Predictive Power ROC Curve (logit link)")
+txt.fit.new1 <- paste("AUC = ", round(auc(rocplot.fit.new1),4))
+text(0.5, 0.5, txt.fit.new1)
+
+probit.new$df.residual
+##deviance
+probit.new$deviance
+##goodness of fit
+#p-value for deviance goodness-of-fit test
+1-pchisq(probit.new$deviance, probit.new$df.residual)
+
+probit.resids <- cbind(rstandard(probit.new,type="pearson"), residuals(probit.new,type="pearson"), residuals(probit.new,type="deviance"), rstandard(probit.new,type="deviance"))
+colnames(probit.resids) = c("std. pearson", "Pearson", "Deviance",  "std. deviance")
+probit.resids <- as.data.frame(probit.resids)
+
+par(mfrow = c(2,3))
+plot(probit.new$residuals, pch = 16, main = "Fitted Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(probit.resids$`std. pearson` , pch = 16, main = "Standardized Pearson Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(probit.resids$Pearson, pch = 16, main = "Pearson Residuals")
+abline(h = 0, lty = 2, col = "blue")
+plot(probit.resids$Deviance, pch = 16, main = "Deviance")
+abline(h = 0, lty = 2, col = "blue")
+plot(probit.resids$`std. deviance`, pch = 16, main = "Standardized Deviance")
+abline(h = 0, lty = 2, col = "blue")
+
+#remove outlier and refit model--greater predictive power
+##probit model
+which.max(abs(probit.new$residuals))
+order(abs(probit.new$residuals))
+probit.new$residuals[c(52,72,55)]
+
+t.new1 = t.complete[-c(52,72,55),]
+
+prob1 = glm(formula = class ~ age + steroid + ascites + varices + alk_phosphate + sgot + protime, family = binomial(link = probit), data = t.new1)
+probit.rocplot.new1 <- roc(class ~ fitted(prob1), data = t.new1)
+plot.roc(probit.rocplot.new1, legacy.axes = T, main = "Predictive Power ROC Curve (probit link)")
+probit.txt.new1 <- paste("AUC = ", round(auc(probit.rocplot.new1),4))
+text(0.5, 0.5, probit.txt.new1)
+
+par(mfrow = c(1,2))
+plot.roc(rocplot.fit.new1, legacy.axes = T, main = "ROC for Refitted Model(logit link)")
+txt.fit.new1 <- paste("AUC = ", round(auc(rocplot.fit.new1),4))
+text(0.5, 0.5, txt.fit.new1)
+probit.rocplot.new1 <- roc(class ~ fitted(prob1), data = t.new1)
+plot.roc(probit.rocplot.new1, legacy.axes = T, main = "ROC for Refitted Model(probit link)")
+probit.txt.new1 <- paste("AUC = ", round(auc(probit.rocplot.new1),4))
+text(0.5, 0.5, probit.txt.new1)
+```
+
+##multinomial analysis
+```{r}
+#create multiple levels
+summary(t.complete$sgot)
+summary(t.complete$bilirubin)
+summary(t.complete$alk_phosphate)
+summary(t.complete$albumin)
+for(i in 1:length(t.complete$alk_phosphate)){
+
+  ##categorical sgot
+  if (t.complete$sgot[i] <=28){t.complete$cat.sgot[i] = 1}
+  else if (t.complete$sgot[i]<=46){t.complete$cat.sgot[i] = 2}
+  else if (t.complete$sgot[i]<=65.25){t.complete$cat.sgot[i] = 3}
+  else if (t.complete$sgot[i] <= 84){t.complete$cat.sgot[i] = 4}
+  ##normal sgot
+  if (t.complete$sgot[i] <=40){t.complete$norm.sgot[i] = 0}
+  else {t.complete$norm.sgot[i] = 1}
+
+  ##categorical albumin
+  if (t.complete$albumin[i] <=3.4){t.complete$cat.albumin[i] = 1}
+  else if (t.complete$albumin[i]<=4){t.complete$cat.albumin[i] = 2}
+  else if (t.complete$albumin[i]<=4.2){t.complete$cat.albumin[i] = 3}
+  else if (t.complete$albumin[i] <= 6.4){t.complete$cat.albumin[i] = 4}
+  ##binary albumin
+  if (3.4 <= t.complete$albumin[i] | t.complete$albumin[i] <=5.4){t.complete$norm.albumin[i] = 0}
+  else {t.complete$norm.albumin[i] = 1}
+  
+}
+
+
+
+#check response distribution
+shapiro.test(data$sgot) #non-normal->use glm
+shapiro.test(data$albumin) #non-normal->use glm
+
+#check correlation
+pairs(t.complete[,c("sgot","steroid","spleen_palpable" ,"antiviral","fatigue","malaise",  "albumin")])
+pairs(t.complete[,c("sgot","anorexia","spiders","ascites" ,"varices","albumin")])
+pairs(t.complete[,c("bilirubin" ,"albumin" , "protime" , "alk_phosphate" , "sgot")])
+
+library(VGAM)
+##multilevel sgot
+sgot.fit <- vglm(factor(cat.sgot) ~ bilirubin + alk_phosphate + albumin + protime, family=multinomial(refLevel = "1"), data = t.complete)
+summary(sgot.fit)
+
+
+sgot.fit.cat <- vglm(factor(cat.sgot) ~ steroid + spleen_palpable +antiviral+fatigue+malaise+anorexia+spiders +ascites + varices, family = multinomial(refLevel = "1"), data = t.complete)
+summary(sgot.fit.cat)
+
+lrtest(sgot.fit.cat, sgot.fit)
+
+##binary sgot
+bin.sgot.fit <- glm(factor(norm.sgot) ~ bilirubin + alk_phosphate + albumin + protime, family=binomial(logit), data = t.complete)
+summary(bin.sgot.fit)
+
+
+bin.sgot.fit.cat <- glm(factor(norm.sgot) ~ steroid + spleen_palpable +antiviral+fatigue+malaise+anorexia+spiders +ascites + varices, family = binomial(logit), data = t.complete)
+summary(bin.sgot.fit.cat)
+
+anova(bin.sgot.fit, bin.sgot.fit.cat, test = "LRT")
+
+##multilevel albumin
+albumin.fit <- vglm(factor(cat.albumin) ~ bilirubin + sgot + protime, family=multinomial(refLevel = "1"), data = t.complete)
+summary(albumin.fit)
+
+albumin.fit.cat <- vglm(factor(cat.sgot) ~ steroid + spleen_palpable +antiviral+fatigue+malaise+anorexia+spiders +ascites + varices, family=multinomial(refLevel = "1"), data = t.complete)
+summary(albumin.fit.cat)
+
+lrtest(albumin.fit.cat,albumin.fit)
+```
+
